@@ -107,6 +107,7 @@ ALTER TABLE tokens DROP CONSTRAINT fk_tokens_user_id;
 
 DROP TABLE IF EXISTS teaching_assignments;
 DROP TABLE IF EXISTS subjects;
+DROP TABLE IF EXISTS classes;
 DROP TABLE IF EXISTS user_students;
 DROP TABLE IF EXISTS user_teachers;
 DROP TABLE IF EXISTS users;

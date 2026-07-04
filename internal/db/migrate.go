@@ -22,3 +22,15 @@ func Migrate(client *sql.DB) {
 		log.Fatal().Err(err).Msg("failed to run migrations")
 	}
 }
+
+func RollbackMigration(client *sql.DB) {
+	goose.SetBaseFS(migrationEmbed)
+
+	if err := goose.SetDialect("postgres"); err != nil {
+		log.Fatal().Err(err).Msg("failed to set dialect")
+	}
+
+	if err := goose.Down(client, "migration"); err != nil {
+		log.Fatal().Err(err).Msg("failed to rollback migration")
+	}
+}
