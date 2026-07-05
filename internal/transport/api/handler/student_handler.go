@@ -1,16 +1,16 @@
 package handler
 
 import (
-	"goschool/internal/domain"
-
 	"github.com/go-chi/chi/v5"
 )
 
+type UserSvc interface{}
+
 type StudentHandler struct {
-	svc domain.UserSvc
+	svc UserSvc
 }
 
-func NewStudentHandler(svc domain.UserSvc) *StudentHandler {
+func NewStudentHandler(svc UserSvc) *StudentHandler {
 	return &StudentHandler{svc: svc}
 }
 

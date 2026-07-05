@@ -1,6 +1,10 @@
 package postgres
 
-import "github.com/jmoiron/sqlx"
+import (
+	"goschool/internal/domain/entity"
+
+	"github.com/jmoiron/sqlx"
+)
 
 type UserRepository struct {
 	db *sqlx.DB
@@ -8,4 +12,8 @@ type UserRepository struct {
 
 func NewUserRepository(db *sqlx.DB) *UserRepository {
 	return &UserRepository{db: db}
+}
+
+func (r *UserRepository) CreateStudent(user *entity.User, student *entity.UserStudent) error {
+	return nil
 }

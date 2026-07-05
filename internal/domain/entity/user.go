@@ -1,5 +1,19 @@
 package entity
 
+const (
+	RoleAdmin   = "admin"
+	RoleTeacher = "teacher"
+	RoleStudent = "student"
+
+	GenderMale   = "male"
+	GenderFemale = "female"
+	GenderOther  = "other"
+
+	WorkingStatusActive   = "active"
+	WorkingStatusInactive = "inactive"
+	WorkingStatusOnLeave  = "on_leave"
+)
+
 type User struct {
 }
 

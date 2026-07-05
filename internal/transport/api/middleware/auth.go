@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/http"
 
-	"goschool/internal/domain/constant"
 	"goschool/internal/env"
+	"goschool/internal/transport/api/apierror"
 	"goschool/internal/transport/api/httpx"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -21,27 +21,27 @@ func Auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var tokenStr string
 
-		cookie, err := r.Cookie(constant.CookieAccessToken)
+		cookie, err := r.Cookie(httpx.CookieAccessToken)
 		if err != nil || cookie.Value == "" {
-			httpx.RenderError(w, r, nil, httpx.ErrUnauthorized)
+			apierror.RenderError(w, r, apierror.ErrUnauthorized)
 			return
 		}
 		tokenStr = cookie.Value
 
 		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (any, error) {
 			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, httpx.ErrUnauthorized
+				return nil, apierror.ErrUnauthorized
 			}
 			return []byte(env.Env.JWTSecret), nil
 		})
 		if err != nil || !token.Valid {
-			httpx.RenderError(w, r, nil, httpx.ErrUnauthorized)
+			apierror.RenderError(w, r, apierror.ErrUnauthorized)
 			return
 		}
 
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			httpx.RenderError(w, r, nil, httpx.ErrUnauthorized)
+			apierror.RenderError(w, r, apierror.ErrUnauthorized)
 			return
 		}
 
@@ -63,12 +63,12 @@ func RequireRole(roles ...string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			role, ok := r.Context().Value(CtxKeyUserRole).(string)
 			if !ok || role == "" {
-				httpx.RenderError(w, r, nil, httpx.ErrUnauthorized)
+				apierror.RenderError(w, r, apierror.ErrUnauthorized)
 				return
 			}
 
 			if _, permitted := allowed[role]; !permitted {
-				httpx.RenderError(w, r, nil, httpx.ErrForbidden)
+				apierror.RenderError(w, r, apierror.ErrForbidden)
 				return
 			}
 

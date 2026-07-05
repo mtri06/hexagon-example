@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"goschool/internal/transport/api/apierror"
 	"io"
 	"net/http"
 	"reflect"
@@ -31,16 +32,16 @@ func DecodeBody[T any](r *http.Request) (T, error) {
 	var payload T
 	err := render.DecodeJSON(r.Body, &payload)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to decode request body")
-		return payload, ErrInvalidBody.WithMsg(decodeBodyErrMsg(err))
+		log.Error().Err(err).Msg("Failed to decode request body")
+		return payload, apierror.New(decodeBodyErrMsg(err), apierror.CodeInvalidBody, http.StatusBadRequest)
 	}
 	err = validate.Struct(payload)
 	if err != nil {
 		if vErr, ok := err.(validator.ValidationErrors); ok {
-			return payload, ErrValidationFailed.WithMsg(sanitizeValidationError(vErr))
+			return payload, apierror.New(sanitizeValidationError(vErr), apierror.CodeInvalidBody, http.StatusBadRequest)
 		}
 		log.Error().Err(err).Msg("validation error")
-		return payload, ErrValidationFailed
+		return payload, apierror.New("Request body contains invalid data", apierror.CodeInvalidBody, http.StatusBadRequest)
 	}
 	return payload, nil
 }
