@@ -1,0 +1,2170 @@
+openapi: 3.1.0
+info:
+  title: goschool API
+  version: 0.1.0
+  description: |
+    School management HTTP service: users (student / teacher / admin), subjects, courses,
+    classes and their yearly curriculum, homeroom and teaching assignments, class rosters,
+    timetables and scores.
+
+    ## Conventions
+    - All endpoints live under `/api/v1` and exchange `application/json`.
+    - Authentication: a short-lived JWT in the `access_token` HttpOnly cookie. A long-lived
+      opaque token in the `refresh_token` HttpOnly cookie (path `/api/v1/auth`) is used only
+      by `POST /auth/refresh`.
+    - `academic_year` is the starting year (`2025` means 2025–2026). `semester` is `1` or `2`.
+    - Dates are `YYYY-MM-DD`; timestamps are RFC 3339 in UTC.
+    - List endpoints are paginated with `page` (1-based) and `page_size` (default 20, max 100)
+      and return `{ data: [...], meta: { page, page_size, total } }`.
+    - Errors always use the `Error` schema. Status codes map from domain error kinds:
+      400 invalid input, 401 unauthenticated, 403 forbidden, 404 not found,
+      409 conflict (uniqueness / still referenced), 422 business rule violated.
+    - Role legend used in descriptions: **A** admin, **T** teacher, **S** student.
+servers:
+  - url: http://localhost:8080/api/v1
+security:
+  - cookieAuth: []
+tags:
+  - name: Auth
+    description: Login, token rotation, own account (users, tokens)
+  - name: Users
+    description: Account administration across roles (users)
+  - name: Students
+    description: Student accounts and their history, timetable and results (users, student_profiles)
+  - name: Teachers
+    description: Teacher accounts and qualifications (users, teacher_profiles, teacher_subjects, teacher_courses)
+  - name: Subjects
+    description: Subjects such as Math, Literature (subjects)
+  - name: Courses
+    description: Concrete courses within a subject, e.g. Math 7 Advanced (courses)
+  - name: Classes
+    description: Classes, yearly curriculum, homeroom teachers and rosters (classes, class_courses, class_homeroom_assignments, student_class_history)
+  - name: Teaching assignments
+    description: Who teaches which course in which class and year (teaching_assignments)
+  - name: Timetable
+    description: Weekly lesson slots per class and semester (timetable_entries)
+  - name: Grading
+    description: Weighted score columns and scores (score_columns, scores)
+
+paths:
+  # ───────────────────────────── Auth ─────────────────────────────
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Log in with username and password
+      description: |
+        Sets `access_token` and `refresh_token` cookies. Inactive users cannot log in
+        (`401 user_inactive`). Wrong credentials return `401 invalid_credentials` without
+        revealing which part was wrong.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Logged in
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/SetAuthCookies' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshToken
+      summary: Rotate tokens using the refresh_token cookie
+      description: |
+        The presented refresh token is marked used and a new pair is issued. Presenting an
+        already-used token is treated as theft: every refresh token of that user is revoked
+        and `401 refresh_token_reused` is returned.
+      security: []
+      parameters:
+        - in: cookie
+          name: refresh_token
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: New cookies issued
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/SetAuthCookies' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Revoke the current refresh token and clear cookies
+      responses:
+        '204': { description: Logged out }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      operationId: getMe
+      summary: Current user with role-specific profile
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/me/password:
+    put:
+      tags: [Auth]
+      operationId: changeMyPassword
+      summary: Change own password
+      description: |
+        Requires the current password. The new password must be 8–72 characters and differ
+        from the current one. All refresh tokens of the user are revoked afterwards.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+      responses:
+        '204': { description: Password changed }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ───────────────────────────── Users ─────────────────────────────
+  /users:
+    get:
+      tags: [Users]
+      operationId: listUsers
+      summary: List users of any role (A)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - in: query
+          name: role
+          schema: { $ref: '#/components/schemas/Role' }
+        - in: query
+          name: is_active
+          schema: { type: boolean }
+        - in: query
+          name: q
+          description: Case-insensitive match on username, name or email
+          schema: { type: string, maxLength: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Users]
+      operationId: getUser
+      summary: Get a user (A)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Users]
+      operationId: updateUser
+      summary: Update common user fields or (de)activate (A)
+      description: |
+        Deactivating a user revokes all their refresh tokens. An admin cannot deactivate
+        themselves (`422 cannot_deactivate_self`). Email must stay unique (`409 email_already_exists`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /users/{id}/reset-password:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Users]
+      operationId: resetUserPassword
+      summary: Set a new password for a user (A)
+      description: Revokes all refresh tokens of the target user.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetPasswordRequest' }
+      responses:
+        '204': { description: Password reset }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admins:
+    post:
+      tags: [Users]
+      operationId: createAdmin
+      summary: Create an admin user (A)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────────── Students ─────────────────────────────
+  /students:
+    get:
+      tags: [Students]
+      operationId: listStudents
+      summary: List students (A; T)
+      description: Teachers see only students enrolled in classes they teach or homeroom.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 100 }
+        - in: query
+          name: is_active
+          schema: { type: boolean }
+        - in: query
+          name: graduated
+          schema: { type: boolean }
+        - in: query
+          name: class_id
+          description: Only students enrolled in this class (requires academic_year)
+          schema: { type: integer }
+        - $ref: '#/components/parameters/AcademicYearQuery'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudentPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Students]
+      operationId: createStudent
+      summary: Create a student account with profile (A)
+      description: |
+        Creates `users` (role forced to `student`) and `student_profiles` atomically.
+        `admission_date` must not be before `date_of_birth`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StudentCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Student' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /students/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Students]
+      operationId: getStudent
+      summary: Get a student (A; S self; T related)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Student' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Students]
+      operationId: updateStudent
+      summary: Update student personal/profile data (A)
+      description: |
+        Setting `graduated_date` marks the student graduated; it must be after
+        `admission_date` and the student must have no open enrollment ending after it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StudentUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Student' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /students/{id}/enrollments:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Students]
+      operationId: listStudentEnrollments
+      summary: Class history of a student (A; S self; T related)
+      responses:
+        '200':
+          description: OK, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Enrollment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /students/{id}/timetable:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - $ref: '#/components/parameters/AcademicYearRequired'
+      - $ref: '#/components/parameters/SemesterRequired'
+    get:
+      tags: [Students, Timetable]
+      operationId: getStudentTimetable
+      summary: Timetable of the class the student is enrolled in (A; S self; T related)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TimetableEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /students/{id}/scores:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - $ref: '#/components/parameters/AcademicYearRequired'
+      - $ref: '#/components/parameters/SemesterQuery'
+      - in: query
+        name: course_id
+        schema: { type: integer }
+    get:
+      tags: [Students, Grading]
+      operationId: listStudentScores
+      summary: Raw scores of a student (A; S self; T related)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Score' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /students/{id}/report:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - $ref: '#/components/parameters/AcademicYearRequired'
+      - $ref: '#/components/parameters/SemesterRequired'
+    get:
+      tags: [Students, Grading]
+      operationId: getStudentReport
+      summary: Per-course weighted averages for a semester (A; S self; T related)
+      description: |
+        A course average is `Σ(score × ratio_percent) / 100` and is `null` when the course's
+        score columns for that semester do not sum to 100 or any column has no score yet.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudentReport' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────── Teachers ─────────────────────────────
+  /teachers:
+    get:
+      tags: [Teachers]
+      operationId: listTeachers
+      summary: List teachers (A)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 100 }
+        - in: query
+          name: is_active
+          schema: { type: boolean }
+        - in: query
+          name: subject_id
+          description: Only teachers qualified for this subject
+          schema: { type: integer }
+        - in: query
+          name: course_id
+          description: Only teachers qualified for this course
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TeacherPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Teachers]
+      operationId: createTeacher
+      summary: Create a teacher account with profile (A)
+      description: Creates `users` (role forced to `teacher`) and `teacher_profiles` atomically.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TeacherCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Teacher' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /teachers/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Teachers]
+      operationId: getTeacher
+      summary: Get a teacher (A; T self)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Teacher' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Teachers]
+      operationId: updateTeacher
+      summary: Update teacher personal/profile data (A)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TeacherUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Teacher' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /teachers/{id}/subjects:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Teachers]
+      operationId: listTeacherSubjects
+      summary: Subjects the teacher is qualified for (A; T self)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Subject' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Teachers]
+      operationId: addTeacherSubject
+      summary: Qualify a teacher for a subject (A)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject_id]
+              properties:
+                subject_id: { type: integer }
+      responses:
+        '201': { description: Added }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /teachers/{id}/subjects/{subjectId}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - in: path
+        name: subjectId
+        required: true
+        schema: { type: integer }
+    delete:
+      tags: [Teachers]
+      operationId: removeTeacherSubject
+      summary: Remove a subject qualification (A)
+      description: Rejected with `409 teacher_subject_in_use` while the teacher still has course qualifications in that subject.
+      responses:
+        '204': { description: Removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /teachers/{id}/courses:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Teachers]
+      operationId: listTeacherCourses
+      summary: Courses the teacher is qualified for (A; T self)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Course' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Teachers]
+      operationId: addTeacherCourse
+      summary: Qualify a teacher for a course (A)
+      description: |
+        The teacher must already be qualified for the course's subject
+        (`422 teacher_not_qualified_for_subject`). The course must be active.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [course_id]
+              properties:
+                course_id: { type: integer }
+      responses:
+        '201': { description: Added }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /teachers/{id}/courses/{courseId}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - in: path
+        name: courseId
+        required: true
+        schema: { type: integer }
+    delete:
+      tags: [Teachers]
+      operationId: removeTeacherCourse
+      summary: Remove a course qualification (A)
+      description: Rejected with `409 teacher_course_in_use` while teaching assignments reference it.
+      responses:
+        '204': { description: Removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /teachers/{id}/assignments:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - $ref: '#/components/parameters/AcademicYearQuery'
+    get:
+      tags: [Teachers, Teaching assignments]
+      operationId: listTeacherAssignments
+      summary: Teaching and homeroom assignments of a teacher (A; T self)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [teaching, homeroom]
+                properties:
+                  teaching:
+                    type: array
+                    items: { $ref: '#/components/schemas/TeachingAssignment' }
+                  homeroom:
+                    type: array
+                    items: { $ref: '#/components/schemas/HomeroomAssignment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /teachers/{id}/timetable:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - $ref: '#/components/parameters/AcademicYearRequired'
+      - $ref: '#/components/parameters/SemesterRequired'
+    get:
+      tags: [Teachers, Timetable]
+      operationId: getTeacherTimetable
+      summary: Lessons of a teacher, derived from active teaching assignments (A; T self)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TimetableEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────── Subjects ─────────────────────────────
+  /subjects:
+    get:
+      tags: [Subjects]
+      operationId: listSubjects
+      summary: List subjects (any role)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubjectPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Subjects]
+      operationId: createSubject
+      summary: Create a subject (A)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubjectInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subject' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /subjects/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Subjects]
+      operationId: getSubject
+      summary: Get a subject (any role)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subject' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Subjects]
+      operationId: updateSubject
+      summary: Rename a subject (A)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubjectInput' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subject' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Subjects]
+      operationId: deleteSubject
+      summary: Delete a subject (A)
+      description: Rejected with `409 subject_in_use` while courses or teacher qualifications reference it.
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────────── Courses ─────────────────────────────
+  /courses:
+    get:
+      tags: [Courses]
+      operationId: listCourses
+      summary: List courses (any role)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - in: query
+          name: subject_id
+          schema: { type: integer }
+        - in: query
+          name: status
+          schema: { $ref: '#/components/schemas/CourseStatus' }
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoursePage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Courses]
+      operationId: createCourse
+      summary: Create a course in a subject (A)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CourseCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Course' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /courses/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Courses]
+      operationId: getCourse
+      summary: Get a course (any role)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Course' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Courses]
+      operationId: updateCourse
+      summary: Rename or (de)activate a course (A)
+      description: |
+        `subject_id` is immutable once the course exists (teacher qualifications depend on it).
+        Inactive courses cannot be added to a curriculum or a teacher's qualifications.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CourseUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Course' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Courses]
+      operationId: deleteCourse
+      summary: Delete a course (A)
+      description: Rejected with `409 course_in_use` while referenced; deactivate it instead.
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────────── Classes ─────────────────────────────
+  /classes:
+    get:
+      tags: [Classes]
+      operationId: listClasses
+      summary: List classes (any role)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - in: query
+          name: grade
+          schema: { type: integer, minimum: 1, maximum: 12 }
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClassPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Classes]
+      operationId: createClass
+      summary: Create a class (A)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClassInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Class' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /classes/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Classes]
+      operationId: getClass
+      summary: Get a class (any role)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Class' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Classes]
+      operationId: updateClass
+      summary: Update a class (A)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClassInput' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Class' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Classes]
+      operationId: deleteClass
+      summary: Delete a class (A)
+      description: Rejected with `409 class_in_use` while curriculum, enrollments or assignments reference it.
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /classes/{id}/courses:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Classes]
+      operationId: listClassCourses
+      summary: Curriculum of a class for a year (any role)
+      parameters:
+        - $ref: '#/components/parameters/AcademicYearRequired'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ClassCourse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Classes]
+      operationId: addClassCourse
+      summary: Add a course to a class curriculum for a year (A)
+      description: The course must be active. A course appears at most once per class and year (`409`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClassCourseCreate' }
+      responses:
+        '201':
+          description: Added
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClassCourse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /classes/{id}/courses/{classCourseId}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - in: path
+        name: classCourseId
+        required: true
+        schema: { type: integer }
+    delete:
+      tags: [Classes]
+      operationId: removeClassCourse
+      summary: Remove a course from a class curriculum (A)
+      description: Rejected with `409 class_course_in_use` while teaching assignments or timetable entries reference it.
+      responses:
+        '204': { description: Removed }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /classes/{id}/homerooms:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Classes]
+      operationId: listClassHomerooms
+      summary: Homeroom teacher history of a class (any role)
+      parameters:
+        - $ref: '#/components/parameters/AcademicYearQuery'
+      responses:
+        '200':
+          description: OK, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/HomeroomAssignment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Classes]
+      operationId: assignHomeroom
+      summary: Assign a homeroom teacher (A)
+      description: |
+        At most one open (no `end_date`) homeroom assignment per class and year
+        (`422 homeroom_already_assigned`) — end the current one first. A teacher can be homeroom of
+        at most one class per year. The teacher must be active. Dates must fall within the academic year
+        (Aug 1 of `academic_year` to Jul 31 of the next year).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HomeroomAssignmentCreate' }
+      responses:
+        '201':
+          description: Assigned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HomeroomAssignment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /homeroom-assignments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      tags: [Classes]
+      operationId: endHomeroomAssignment
+      summary: Set or change the end date of a homeroom assignment (A)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EndDateInput' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HomeroomAssignment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /classes/{id}/enrollments:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Classes]
+      operationId: listClassEnrollments
+      summary: Roster of a class for a year (A; T related)
+      parameters:
+        - $ref: '#/components/parameters/AcademicYearRequired'
+        - in: query
+          name: active_only
+          description: Only enrollments without an end date
+          schema: { type: boolean, default: true }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Enrollment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Classes]
+      operationId: enrollStudents
+      summary: Enroll one or more students into a class (A)
+      description: |
+        All-or-nothing. Each student must be active, not graduated, and have no open enrollment
+        for the same academic year (`422 student_already_enrolled`; use `PATCH /enrollments/{id}`
+        with `transfer_to_class_id` to move a student). Dates must fall within the academic year.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EnrollmentCreate' }
+      responses:
+        '201':
+          description: Enrolled
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Enrollment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /enrollments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      tags: [Classes]
+      operationId: updateEnrollment
+      summary: End an enrollment, optionally transferring the student (A)
+      description: |
+        Sets `end_date`. If `transfer_to_class_id` is given, a new enrollment in that class starts
+        the day after `end_date` in the same academic year, atomically. Returns the new enrollment
+        when transferring, otherwise the ended one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EnrollmentUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Enrollment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  # ───────────────────────────── Teaching assignments ─────────────────────────────
+  /teaching-assignments:
+    get:
+      tags: [Teaching assignments]
+      operationId: listTeachingAssignments
+      summary: List teaching assignments (A)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - in: query
+          name: class_id
+          schema: { type: integer }
+        - in: query
+          name: teacher_id
+          schema: { type: integer }
+        - in: query
+          name: course_id
+          schema: { type: integer }
+        - $ref: '#/components/parameters/AcademicYearQuery'
+        - in: query
+          name: vacant
+          description: Only assignments without a teacher
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TeachingAssignmentPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Teaching assignments]
+      operationId: createTeachingAssignment
+      summary: Assign a teacher to teach a course in a class for a year (A)
+      description: |
+        Rules:
+        - The (class, course, academic_year) must be in the class curriculum (`422 course_not_in_curriculum`).
+        - If `teacher_id` is set, the teacher must be active and qualified for the course
+          (`422 teacher_not_qualified_for_course`). A null `teacher_id` creates a vacant slot.
+        - At most one open assignment per (class, course, academic_year) (`422 class_course_already_assigned`).
+        - Dates must fall within the academic year; `end_date` ≥ `start_date`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TeachingAssignmentCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TeachingAssignment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /teaching-assignments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Teaching assignments]
+      operationId: getTeachingAssignment
+      summary: Get a teaching assignment (A; T own)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TeachingAssignment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Teaching assignments]
+      operationId: updateTeachingAssignment
+      summary: Set the teacher of a vacant assignment or change the end date (A)
+      description: |
+        Replacing one teacher with another mid-year is done by ending this assignment and creating
+        a new one, so that history (and score authorship checks) stays correct. Hence `teacher_id`
+        may only be set when currently null (`422 assignment_not_vacant`).
+        Changing the teacher re-checks the timetable for teacher clashes (`422 teacher_slot_conflict`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TeachingAssignmentUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TeachingAssignment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+    delete:
+      tags: [Teaching assignments]
+      operationId: deleteTeachingAssignment
+      summary: Delete a teaching assignment created by mistake (A)
+      description: Rejected with `409 assignment_has_scores` if scores were recorded under it; end it instead.
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────────── Timetable ─────────────────────────────
+  /classes/{id}/timetable:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - $ref: '#/components/parameters/AcademicYearRequired'
+      - $ref: '#/components/parameters/SemesterRequired'
+    get:
+      tags: [Timetable, Classes]
+      operationId: getClassTimetable
+      summary: Weekly timetable of a class (any role)
+      responses:
+        '200':
+          description: OK, ordered by day_of_week, lesson_number
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TimetableEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /timetable-entries:
+    post:
+      tags: [Timetable]
+      operationId: createTimetableEntry
+      summary: Put a course into a class's weekly slot (A)
+      description: |
+        Rules:
+        - The (class, course, academic_year) must be in the class curriculum (`422 course_not_in_curriculum`).
+        - The slot (class, year, semester, day, lesson) must be free (`409 timetable_slot_taken`).
+        - The teacher currently assigned to that class-course must not teach another class in the same
+          slot (`422 teacher_slot_conflict`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TimetableEntryCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TimetableEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /timetable-entries/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      tags: [Timetable]
+      operationId: updateTimetableEntry
+      summary: Move an entry to another slot or swap its course (A)
+      description: Same rules as creation are re-checked.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TimetableEntryUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TimetableEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+    delete:
+      tags: [Timetable]
+      operationId: deleteTimetableEntry
+      summary: Remove an entry (A)
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────── Grading ─────────────────────────────
+  /score-columns:
+    get:
+      tags: [Grading]
+      operationId: listScoreColumns
+      summary: Score columns of a course for a year/semester (any role)
+      parameters:
+        - in: query
+          name: course_id
+          required: true
+          schema: { type: integer }
+        - $ref: '#/components/parameters/AcademicYearRequired'
+        - $ref: '#/components/parameters/SemesterRequired'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScoreColumnSet' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Grading]
+      operationId: createScoreColumn
+      summary: Add a score column (A)
+      description: |
+        `name` is unique within (course, academic_year, semester) (`409 score_column_name_taken`).
+        The sum of `ratio_percent` within that scope must not exceed 100 (`422 ratio_total_exceeded`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScoreColumnCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScoreColumn' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /score-columns/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      tags: [Grading]
+      operationId: updateScoreColumn
+      summary: Rename or reweight a score column (A)
+      description: Same name and ratio rules as creation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScoreColumnUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScoreColumn' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+    delete:
+      tags: [Grading]
+      operationId: deleteScoreColumn
+      summary: Delete a score column (A)
+      description: |
+        Rejected with `409 score_column_has_scores` if any score exists, unless `force=true`,
+        in which case its scores are deleted too.
+      parameters:
+        - in: query
+          name: force
+          schema: { type: boolean, default: false }
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /classes/{id}/gradebook:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - in: query
+        name: course_id
+        required: true
+        schema: { type: integer }
+      - $ref: '#/components/parameters/AcademicYearRequired'
+      - $ref: '#/components/parameters/SemesterRequired'
+    get:
+      tags: [Grading, Classes]
+      operationId: getGradebook
+      summary: Students × score columns matrix for a class-course (A; T assigned or homeroom)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Gradebook' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Grading, Classes]
+      operationId: upsertGradebookScores
+      summary: Bulk create/update scores for a class-course (A; T assigned)
+      description: |
+        All-or-nothing upsert keyed by (student_id, score_column_id). Rules:
+        - A teacher must hold an active teaching assignment for (class, course, academic_year)
+          (`403 not_assigned_to_class_course`). Admins bypass this.
+        - Each student must have been enrolled in the class during that academic year
+          (`422 student_not_in_class`).
+        - Each column must belong to the requested course, year and semester (`422 score_column_mismatch`).
+        - `score` is 0–10 with at most 2 decimals.
+        - `recorded_by` is set to the caller.
+        Per-entry failures are reported in `fields` as `entries[i].<field>`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GradebookUpsert' }
+      responses:
+        '200':
+          description: Updated gradebook
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Gradebook' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  /scores/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    delete:
+      tags: [Grading]
+      operationId: deleteScore
+      summary: Delete a single score (A; T assigned)
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: HS256 JWT with claims `sub` (user id) and `role`.
+
+  headers:
+    SetAuthCookies:
+      description: |
+        `access_token=<jwt>; HttpOnly; Secure; SameSite=Lax; Path=/` and
+        `refresh_token=<opaque>; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`
+      schema: { type: string }
+
+  parameters:
+    Id:
+      in: path
+      name: id
+      required: true
+      schema: { type: integer, minimum: 1 }
+    Page:
+      in: query
+      name: page
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      in: query
+      name: page_size
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    AcademicYearQuery:
+      in: query
+      name: academic_year
+      schema: { $ref: '#/components/schemas/AcademicYear' }
+    AcademicYearRequired:
+      in: query
+      name: academic_year
+      required: true
+      schema: { $ref: '#/components/schemas/AcademicYear' }
+    SemesterQuery:
+      in: query
+      name: semester
+      schema: { $ref: '#/components/schemas/Semester' }
+    SemesterRequired:
+      in: query
+      name: semester
+      required: true
+      schema: { $ref: '#/components/schemas/Semester' }
+
+  responses:
+    BadRequest:
+      description: Malformed body/params or domain validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: validation_failed
+            message: Invalid input
+            fields:
+              - { field: email, message: must be a valid email }
+    Unauthorized:
+      description: Missing/invalid credentials or token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Authenticated but not allowed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource (or a referenced resource) not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Uniqueness violation or resource still referenced
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unprocessable:
+      description: Request is well-formed but violates a business rule
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    # ── primitives ──
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, description: Machine-readable error code, examples: [teacher_not_qualified_for_course] }
+        message: { type: string }
+        fields:
+          type: array
+          items: { $ref: '#/components/schemas/FieldError' }
+    FieldError:
+      type: object
+      required: [field, message]
+      properties:
+        field: { type: string, examples: ['entries[3].score'] }
+        message: { type: string }
+    PageMeta:
+      type: object
+      required: [page, page_size, total]
+      properties:
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+    Role:
+      type: string
+      enum: [student, teacher, admin]
+    Gender:
+      type: string
+      enum: [male, female, other]
+    CourseStatus:
+      type: string
+      enum: [active, inactive]
+    AcademicYear:
+      type: integer
+      minimum: 2000
+      maximum: 2100
+      description: Starting year; 2025 means 2025–2026
+    Semester:
+      type: integer
+      enum: [1, 2]
+    Timestamps:
+      type: object
+      required: [created_at, updated_at]
+      properties:
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    EndDateInput:
+      type: object
+      required: [end_date]
+      properties:
+        end_date: { type: string, format: date }
+
+    # ── auth ──
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 100 }
+        password: { type: string, minLength: 1, maxLength: 72 }
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password: { type: string, maxLength: 72 }
+        new_password: { type: string, minLength: 8, maxLength: 72 }
+    ResetPasswordRequest:
+      type: object
+      required: [new_password]
+      properties:
+        new_password: { type: string, minLength: 8, maxLength: 72 }
+    Me:
+      type: object
+      required: [user]
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        student_profile: { $ref: '#/components/schemas/StudentProfile' }
+        teacher_profile: { $ref: '#/components/schemas/TeacherProfile' }
+
+    # ── users ──
+    User:
+      allOf:
+        - type: object
+          required: [id, username, role, name, date_of_birth, gender, is_active]
+          properties:
+            id: { type: integer }
+            username: { type: string }
+            email: { type: [string, 'null'], format: email }
+            role: { $ref: '#/components/schemas/Role' }
+            name: { type: string }
+            date_of_birth: { type: string, format: date }
+            gender: { $ref: '#/components/schemas/Gender' }
+            is_active: { type: boolean }
+        - $ref: '#/components/schemas/Timestamps'
+    UserCreate:
+      type: object
+      required: [username, password, name, date_of_birth, gender]
+      description: |
+        `username`: 3–100 chars of `[a-z0-9._-]`, unique. `email`: optional, unique when present.
+        `date_of_birth` must be in the past.
+      properties:
+        username: { type: string, minLength: 3, maxLength: 100 }
+        password: { type: string, minLength: 8, maxLength: 72 }
+        email: { type: [string, 'null'], format: email, maxLength: 100 }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        date_of_birth: { type: string, format: date }
+        gender: { $ref: '#/components/schemas/Gender' }
+    UserUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        email: { type: [string, 'null'], format: email, maxLength: 100 }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        date_of_birth: { type: string, format: date }
+        gender: { $ref: '#/components/schemas/Gender' }
+        is_active: { type: boolean }
+    UserPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/User' }
+        meta: { $ref: '#/components/schemas/PageMeta' }
+
+    # ── students ──
+    StudentProfile:
+      type: object
+      required: [admission_date]
+      properties:
+        admission_date: { type: string, format: date }
+        graduated_date: { type: [string, 'null'], format: date }
+    Student:
+      type: object
+      required: [user, profile]
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        profile: { $ref: '#/components/schemas/StudentProfile' }
+        current_enrollment:
+          oneOf:
+            - $ref: '#/components/schemas/Enrollment'
+            - type: 'null'
+    StudentCreate:
+      allOf:
+        - $ref: '#/components/schemas/UserCreate'
+        - type: object
+          required: [admission_date]
+          properties:
+            admission_date: { type: string, format: date }
+    StudentUpdate:
+      allOf:
+        - $ref: '#/components/schemas/UserUpdate'
+        - type: object
+          properties:
+            admission_date: { type: string, format: date }
+            graduated_date: { type: [string, 'null'], format: date }
+    StudentPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Student' }
+        meta: { $ref: '#/components/schemas/PageMeta' }
+    StudentReport:
+      type: object
+      required: [student_id, academic_year, semester, courses]
+      properties:
+        student_id: { type: integer }
+        academic_year: { $ref: '#/components/schemas/AcademicYear' }
+        semester: { $ref: '#/components/schemas/Semester' }
+        class_id: { type: [integer, 'null'] }
+        courses:
+          type: array
+          items:
+            type: object
+            required: [course_id, course_name, scores, average]
+            properties:
+              course_id: { type: integer }
+              course_name: { type: string }
+              scores:
+                type: array
+                items:
+                  type: object
+                  required: [score_column_id, name, ratio_percent, score]
+                  properties:
+                    score_column_id: { type: integer }
+                    name: { type: string }
+                    ratio_percent: { type: number }
+                    score: { type: [number, 'null'] }
+              average: { type: [number, 'null'] }
+        overall_average:
+          type: [number, 'null']
+          description: Unweighted mean of non-null course averages
+
+    # ── teachers ──
+    TeacherProfile:
+      type: object
+      required: [hire_date]
+      properties:
+        hire_date: { type: string, format: date }
+    Teacher:
+      type: object
+      required: [user, profile]
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        profile: { $ref: '#/components/schemas/TeacherProfile' }
+    TeacherCreate:
+      allOf:
+        - $ref: '#/components/schemas/UserCreate'
+        - type: object
+          required: [hire_date]
+          properties:
+            hire_date: { type: string, format: date }
+    TeacherUpdate:
+      allOf:
+        - $ref: '#/components/schemas/UserUpdate'
+        - type: object
+          properties:
+            hire_date: { type: string, format: date }
+    TeacherPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Teacher' }
+        meta: { $ref: '#/components/schemas/PageMeta' }
+
+    # ── subjects & courses ──
+    Subject:
+      allOf:
+        - type: object
+          required: [id, name]
+          properties:
+            id: { type: integer }
+            name: { type: string }
+        - $ref: '#/components/schemas/Timestamps'
+    SubjectInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+    SubjectPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Subject' }
+        meta: { $ref: '#/components/schemas/PageMeta' }
+    Course:
+      allOf:
+        - type: object
+          required: [id, subject_id, name, status]
+          properties:
+            id: { type: integer }
+            subject_id: { type: integer }
+            subject_name: { type: string }
+            name: { type: string, examples: [Math 7 Advanced] }
+            status: { $ref: '#/components/schemas/CourseStatus' }
+        - $ref: '#/components/schemas/Timestamps'
+    CourseCreate:
+      type: object
+      required: [subject_id, name]
+      properties:
+        subject_id: { type: integer }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        status: { $ref: '#/components/schemas/CourseStatus' }
+    CourseUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        status: { $ref: '#/components/schemas/CourseStatus' }
+    CoursePage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Course' }
+        meta: { $ref: '#/components/schemas/PageMeta' }
+
+    # ── classes ──
+    Class:
+      allOf:
+        - type: object
+          required: [id, name]
+          properties:
+            id: { type: integer }
+            name: { type: string, examples: [7A1] }
+            grade: { type: [integer, 'null'], minimum: 1, maximum: 12 }
+        - $ref: '#/components/schemas/Timestamps'
+    ClassInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        grade: { type: [integer, 'null'], minimum: 1, maximum: 12 }
+    ClassPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Class' }
+        meta: { $ref: '#/components/schemas/PageMeta' }
+    ClassCourse:
+      allOf:
+        - type: object
+          required: [id, class_id, course_id, academic_year]
+          properties:
+            id: { type: integer }
+            class_id: { type: integer }
+            course_id: { type: integer }
+            course_name: { type: string }
+            academic_year: { $ref: '#/components/schemas/AcademicYear' }
+            teacher_id:
+              type: [integer, 'null']
+              description: Teacher of the currently open teaching assignment, if any
+        - $ref: '#/components/schemas/Timestamps'
+    ClassCourseCreate:
+      type: object
+      required: [course_id, academic_year]
+      properties:
+        course_id: { type: integer }
+        academic_year: { $ref: '#/components/schemas/AcademicYear' }
+    DatedAssignment:
+      type: object
+      required: [academic_year, start_date]
+      properties:
+        academic_year: { $ref: '#/components/schemas/AcademicYear' }
+        start_date: { type: string, format: date }
+        end_date: { type: [string, 'null'], format: date }
+    HomeroomAssignment:
+      allOf:
+        - type: object
+          required: [id, teacher_id, class_id]
+          properties:
+            id: { type: integer }
+            teacher_id: { type: integer }
+            teacher_name: { type: string }
+            class_id: { type: integer }
+        - $ref: '#/components/schemas/DatedAssignment'
+        - $ref: '#/components/schemas/Timestamps'
+    HomeroomAssignmentCreate:
+      allOf:
+        - type: object
+          required: [teacher_id]
+          properties:
+            teacher_id: { type: integer }
+        - $ref: '#/components/schemas/DatedAssignment'
+    Enrollment:
+      allOf:
+        - type: object
+          required: [id, student_id, class_id]
+          properties:
+            id: { type: integer }
+            student_id: { type: integer }
+            student_name: { type: string }
+            class_id: { type: integer }
+            class_name: { type: string }
+        - $ref: '#/components/schemas/DatedAssignment'
+        - $ref: '#/components/schemas/Timestamps'
+    EnrollmentCreate:
+      type: object
+      required: [student_ids, academic_year, start_date]
+      properties:
+        student_ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { type: integer }
+        academic_year: { $ref: '#/components/schemas/AcademicYear' }
+        start_date: { type: string, format: date }
+    EnrollmentUpdate:
+      type: object
+      required: [end_date]
+      properties:
+        end_date: { type: string, format: date }
+        transfer_to_class_id: { type: [integer, 'null'] }
+
+    # ── teaching assignments ──
+    TeachingAssignment:
+      allOf:
+        - type: object
+          required: [id, class_id, course_id]
+          properties:
+            id: { type: integer }
+            teacher_id: { type: [integer, 'null'], description: null means vacant }
+            teacher_name: { type: [string, 'null'] }
+            class_id: { type: integer }
+            class_name: { type: string }
+            course_id: { type: integer }
+            course_name: { type: string }
+        - $ref: '#/components/schemas/DatedAssignment'
+        - $ref: '#/components/schemas/Timestamps'
+    TeachingAssignmentCreate:
+      allOf:
+        - type: object
+          required: [class_id, course_id]
+          properties:
+            teacher_id: { type: [integer, 'null'] }
+            class_id: { type: integer }
+            course_id: { type: integer }
+        - $ref: '#/components/schemas/DatedAssignment'
+    TeachingAssignmentUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        teacher_id: { type: integer }
+        end_date: { type: [string, 'null'], format: date }
+    TeachingAssignmentPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/TeachingAssignment' }
+        meta: { $ref: '#/components/schemas/PageMeta' }
+
+    # ── timetable ──
+    TimetableSlot:
+      type: object
+      required: [day_of_week, lesson_number]
+      properties:
+        day_of_week: { type: integer, minimum: 1, maximum: 7, description: 1 = Monday }
+        lesson_number: { type: integer, minimum: 1, maximum: 8 }
+    TimetableEntry:
+      allOf:
+        - type: object
+          required: [id, class_id, course_id, academic_year, semester]
+          properties:
+            id: { type: integer }
+            class_id: { type: integer }
+            class_name: { type: string }
+            course_id: { type: integer }
+            course_name: { type: string }
+            teacher_id: { type: [integer, 'null'] }
+            teacher_name: { type: [string, 'null'] }
+            academic_year: { $ref: '#/components/schemas/AcademicYear' }
+            semester: { $ref: '#/components/schemas/Semester' }
+        - $ref: '#/components/schemas/TimetableSlot'
+    TimetableEntryCreate:
+      allOf:
+        - type: object
+          required: [class_id, course_id, academic_year, semester]
+          properties:
+            class_id: { type: integer }
+            course_id: { type: integer }
+            academic_year: { $ref: '#/components/schemas/AcademicYear' }
+            semester: { $ref: '#/components/schemas/Semester' }
+        - $ref: '#/components/schemas/TimetableSlot'
+    TimetableEntryUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        course_id: { type: integer }
+        day_of_week: { type: integer, minimum: 1, maximum: 7 }
+        lesson_number: { type: integer, minimum: 1, maximum: 8 }
+
+    # ── grading ──
+    ScoreColumn:
+      allOf:
+        - type: object
+          required: [id, course_id, academic_year, semester, name, ratio_percent]
+          properties:
+            id: { type: integer }
+            course_id: { type: integer }
+            academic_year: { $ref: '#/components/schemas/AcademicYear' }
+            semester: { $ref: '#/components/schemas/Semester' }
+            name: { type: string, examples: [1T, HK] }
+            ratio_percent: { type: number, exclusiveMinimum: 0, maximum: 100 }
+        - $ref: '#/components/schemas/Timestamps'
+    ScoreColumnSet:
+      type: object
+      required: [columns, ratio_total, complete]
+      properties:
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/ScoreColumn' }
+        ratio_total: { type: number }
+        complete:
+          type: boolean
+          description: true when ratio_total == 100, i.e. averages can be computed
+    ScoreColumnCreate:
+      type: object
+      required: [course_id, academic_year, semester, name, ratio_percent]
+      properties:
+        course_id: { type: integer }
+        academic_year: { $ref: '#/components/schemas/AcademicYear' }
+        semester: { $ref: '#/components/schemas/Semester' }
+        name: { type: string, minLength: 1, maxLength: 50 }
+        ratio_percent: { type: number, exclusiveMinimum: 0, maximum: 100, multipleOf: 0.01 }
+    ScoreColumnUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 50 }
+        ratio_percent: { type: number, exclusiveMinimum: 0, maximum: 100, multipleOf: 0.01 }
+    Score:
+      allOf:
+        - type: object
+          required: [id, student_id, score_column_id, score, recorded_by]
+          properties:
+            id: { type: integer }
+            student_id: { type: integer }
+            score_column_id: { type: integer }
+            score: { type: number, minimum: 0, maximum: 10 }
+            recorded_by: { type: integer }
+        - $ref: '#/components/schemas/Timestamps'
+    Gradebook:
+      type: object
+      required: [class_id, course_id, academic_year, semester, columns, rows]
+      properties:
+        class_id: { type: integer }
+        course_id: { type: integer }
+        academic_year: { $ref: '#/components/schemas/AcademicYear' }
+        semester: { $ref: '#/components/schemas/Semester' }
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/ScoreColumn' }
+        ratio_total: { type: number }
+        rows:
+          type: array
+          items:
+            type: object
+            required: [student_id, student_name, scores, average]
+            properties:
+              student_id: { type: integer }
+              student_name: { type: string }
+              scores:
+                type: object
+                description: Map of score_column_id → score (missing key means no score yet)
+                additionalProperties:
+                  $ref: '#/components/schemas/Score'
+              average: { type: [number, 'null'] }
+    GradebookUpsert:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          minItems: 1
+          maxItems: 2000
+          items:
+            type: object
+            required: [student_id, score_column_id, score]
+            properties:
+              student_id: { type: integer }
+              score_column_id: { type: integer }
+              score: { type: number, minimum: 0, maximum: 10, multipleOf: 0.01 }
