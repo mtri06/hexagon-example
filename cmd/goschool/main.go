@@ -62,6 +62,7 @@ func run(ctx context.Context, cmd string, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
+	log.Info().Msg("connected to PostgreSQL")
 	defer bdb.Close()
 
 	switch cmd {

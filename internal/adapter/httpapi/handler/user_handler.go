@@ -8,7 +8,6 @@ import (
 
 	"goschool/internal/adapter/httpapi/dto"
 	"goschool/internal/adapter/httpapi/httpx"
-	"goschool/internal/adapter/httpapi/middleware"
 	"goschool/internal/adapter/httpapi/respond"
 	"goschool/internal/domain/identity"
 	"goschool/internal/domain/shared"
@@ -30,13 +29,14 @@ func NewUserHandler(svc UserService) *UserHandler {
 	return &UserHandler{svc: svc}
 }
 
+// MountRoutes registers the admin-only user routes. UserService enforces the
+// admin requirement, so no role middleware is needed here.
 func (h *UserHandler) MountRoutes(_, protected chi.Router) {
-	admin := protected.With(middleware.RequireRole(shared.RoleAdmin))
-	admin.Get("/users", h.list)
-	admin.Get("/users/{id}", h.get)
-	admin.Patch("/users/{id}", h.update)
-	admin.Post("/users/{id}/reset-password", h.resetPassword)
-	admin.Post("/admins", h.createAdmin)
+	protected.Get("/users", h.list)
+	protected.Get("/users/{id}", h.get)
+	protected.Patch("/users/{id}", h.update)
+	protected.Post("/users/{id}/reset-password", h.resetPassword)
+	protected.Post("/admins", h.createAdmin)
 }
 
 func (h *UserHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -137,14 +137,4 @@ func (h *UserHandler) createAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, http.StatusCreated, dto.NewUser(u))
-}
-
-// actorAndID reads the authenticated actor and the {id} path parameter.
-func actorAndID(r *http.Request) (shared.Actor, int, error) {
-	actor, err := httpx.Actor(r)
-	if err != nil {
-		return shared.Actor{}, 0, err
-	}
-	id, err := httpx.GetParamID(r, "id")
-	return actor, id, err
 }

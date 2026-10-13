@@ -1,0 +1,906 @@
+{
+  "info": {
+    "name": "goschool API",
+    "description": "Requests for the endpoints implemented so far (phases 0–2: health, auth, user administration, subjects and courses).\n\nAuthentication uses HttpOnly cookies. Postman stores them automatically, so run **Auth → Login (admin)** first; every later request sends the `access_token` cookie. The access token lives 15 minutes by default: run **Auth → Refresh tokens** (or log in again) when you get `401 unauthorized`.\n\nCollection variables (edit them under the collection's *Variables* tab):\n- `baseUrl`: server root including `/api/v1`\n- `adminUsername` / `adminPassword`: must match `ADMIN_USERNAME` / `ADMIN_PASSWORD` used by `goschool seed-admin`\n- `myUserId`, `createdUserId`: filled in by test scripts\n\nEach request has a test script that checks the expected status code, so you can also use the Collection Runner (run the folders in order).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080/api/v1"
+    },
+    {
+      "key": "adminUsername",
+      "value": "admin"
+    },
+    {
+      "key": "adminPassword",
+      "value": "change-me-please"
+    },
+    {
+      "key": "newAdminPassword",
+      "value": "a-new-password-123"
+    },
+    {
+      "key": "myUserId",
+      "value": ""
+    },
+    {
+      "key": "createdUserId",
+      "value": ""
+    },
+    {
+      "key": "createdUsername",
+      "value": ""
+    },
+    {
+      "key": "subjectId",
+      "value": ""
+    },
+    {
+      "key": "subjectName",
+      "value": ""
+    },
+    {
+      "key": "courseId",
+      "value": ""
+    },
+    {
+      "key": "courseName",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/healthz"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login (admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('sets auth cookies', () => {",
+                  "  pm.expect(pm.cookies.has('access_token')).to.be.true;",
+                  "});",
+                  "pm.collectionVariables.set('myUserId', pm.response.json().user.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{adminUsername}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login",
+            "description": "Sets the `access_token` and `refresh_token` cookies and returns the user."
+          }
+        },
+        {
+          "name": "Login: wrong password (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('401 invalid_credentials', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().code).to.eql('invalid_credentials');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{adminUsername}}\",\n  \"password\": \"definitely-wrong\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login",
+            "description": "Does not touch your existing cookies: a failed login sets none."
+          }
+        },
+        {
+          "name": "Me",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/auth/me"
+          }
+        },
+        {
+          "name": "Refresh tokens",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/auth/refresh",
+            "description": "Uses the `refresh_token` cookie (path `/api/v1/auth`) and rotates both cookies. The previous refresh token becomes unusable; replaying it revokes all of the user's sessions."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users (admin)",
+      "description": "All requests here require an admin session (run Auth → Login (admin) first).",
+      "item": [
+        {
+          "name": "Create admin",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('createdUsername', 'admin_' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('createdUserId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{createdUsername}}\",\n  \"password\": \"password123\",\n  \"email\": \"{{createdUsername}}@school.io\",\n  \"name\": \"Second Admin\",\n  \"date_of_birth\": \"1990-04-01\",\n  \"gender\": \"female\"\n}"
+            },
+            "url": "{{baseUrl}}/admins",
+            "description": "Username is lower-cased; it must be 3–100 chars of a-z, 0-9, '.', '_' or '-'. The pre-request script generates a unique one. The new user's id is saved to `createdUserId`."
+          }
+        },
+        {
+          "name": "Create admin: validation errors (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('400 validation_failed with field errors', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.code).to.eql('validation_failed');",
+                  "  pm.expect(body.fields.map(f => f.field)).to.include.members(['username', 'password', 'email', 'date_of_birth']);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"A!\",\n  \"password\": \"short\",\n  \"email\": \"not-an-email\",\n  \"name\": \"Bad Input\",\n  \"date_of_birth\": \"2999-01-01\",\n  \"gender\": \"female\"\n}"
+            },
+            "url": "{{baseUrl}}/admins",
+            "description": "Domain validation returns every invalid field at once."
+          }
+        },
+        {
+          "name": "List users",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/users?page=1&page_size=20&role=admin&is_active=true&q=admin",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "page_size",
+                  "value": "20",
+                  "description": "1–100"
+                },
+                {
+                  "key": "role",
+                  "value": "admin",
+                  "description": "student | teacher | admin",
+                  "disabled": true
+                },
+                {
+                  "key": "is_active",
+                  "value": "true",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "admin",
+                  "description": "Case-insensitive match on username, name or email",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Tick the disabled query params to try the filters."
+          }
+        },
+        {
+          "name": "Get user",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/users/{{createdUserId}}"
+          }
+        },
+        {
+          "name": "Get user: not found (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('404 user_not_found', () => {",
+                  "  pm.response.to.have.status(404);",
+                  "  pm.expect(pm.response.json().code).to.eql('user_not_found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/users/999999"
+          }
+        },
+        {
+          "name": "Update user",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('email cleared', () => pm.expect(pm.response.json().email).to.be.null);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Renamed Admin\",\n  \"email\": null,\n  \"gender\": \"other\"\n}"
+            },
+            "url": "{{baseUrl}}/users/{{createdUserId}}",
+            "description": "Partial update: only the fields you send change. `\"email\": null` clears the email; omitting `email` leaves it unchanged. Username and role cannot be changed."
+          }
+        },
+        {
+          "name": "Deactivate user",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('inactive', () => pm.expect(pm.response.json().is_active).to.be.false);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"is_active\": false\n}"
+            },
+            "url": "{{baseUrl}}/users/{{createdUserId}}",
+            "description": "A deactivated user cannot log in and all their refresh tokens are revoked. Send `true` to reactivate."
+          }
+        },
+        {
+          "name": "Deactivate yourself (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('422 cannot_deactivate_self', () => {",
+                  "  pm.response.to.have.status(422);",
+                  "  pm.expect(pm.response.json().code).to.eql('cannot_deactivate_self');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"is_active\": false\n}"
+            },
+            "url": "{{baseUrl}}/users/{{myUserId}}"
+          }
+        },
+        {
+          "name": "Reset user password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"new_password\": \"brand-new-password\"\n}"
+            },
+            "url": "{{baseUrl}}/users/{{createdUserId}}/reset-password",
+            "description": "Sets a new password (min 8 chars) and revokes the user's sessions."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Subjects",
+      "description": "Any logged-in user can read subjects; only admins can create, rename or delete them. Run Auth → Login (admin) first.",
+      "item": [
+        {
+          "name": "Create subject",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('subjectName', 'Math ' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('subjectId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/subjects",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{subjectName}}\"\n}"
+            },
+            "description": "Names are unique, compared case-insensitively. The pre-request script generates a unique name; the id is saved to `subjectId`."
+          }
+        },
+        {
+          "name": "Create subject: duplicate name (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('409 subject_name_already_exists', () => {",
+                  "  pm.response.to.have.status(409);",
+                  "  pm.expect(pm.response.json().code).to.eql('subject_name_already_exists');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/subjects",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{subjectName}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "List subjects",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/subjects?page=1&page_size=20&q=math",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "subjects"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "page_size",
+                  "value": "20"
+                },
+                {
+                  "key": "q",
+                  "value": "math",
+                  "description": "Case-insensitive name search",
+                  "disabled": true
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get subject",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/subjects/{{subjectId}}"
+          }
+        },
+        {
+          "name": "Rename subject",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('subjectName', pm.response.json().name);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/subjects/{{subjectId}}",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{subjectName}} (renamed)\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Courses",
+      "description": "Any logged-in user can read courses; only admins can create, update or delete them. Run the Subjects folder first: it creates the subject these courses belong to.",
+      "item": [
+        {
+          "name": "Create course",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('courseName', 'Math 7 ' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('courseId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/courses",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject_id\": {{subjectId}},\n  \"name\": \"{{courseName}}\",\n  \"status\": \"active\"\n}"
+            },
+            "description": "`status` is optional (defaults to `active`). The response includes `subject_name`. The id is saved to `courseId`."
+          }
+        },
+        {
+          "name": "Create course: unknown subject (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('404 subject_not_found', () => {",
+                  "  pm.response.to.have.status(404);",
+                  "  pm.expect(pm.response.json().code).to.eql('subject_not_found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/courses",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject_id\": 999999,\n  \"name\": \"Ghost course\"\n}"
+            }
+          }
+        },
+        {
+          "name": "List courses",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/courses?page=1&page_size=20&subject_id={{subjectId}}&status=active&q=math",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "page_size",
+                  "value": "20"
+                },
+                {
+                  "key": "subject_id",
+                  "value": "{{subjectId}}"
+                },
+                {
+                  "key": "status",
+                  "value": "active",
+                  "description": "active | inactive",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "math",
+                  "description": "Case-insensitive name search",
+                  "disabled": true
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get course",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/courses/{{courseId}}"
+          }
+        },
+        {
+          "name": "Deactivate course",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('inactive', () => pm.expect(pm.response.json().status).to.eql('inactive'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/courses/{{courseId}}",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"inactive\"\n}"
+            },
+            "description": "Partial update of `name` and/or `status`. `subject_id` cannot change; it is ignored if sent."
+          }
+        },
+        {
+          "name": "Delete subject: still has courses (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('409 subject_in_use', () => {",
+                  "  pm.response.to.have.status(409);",
+                  "  pm.expect(pm.response.json().code).to.eql('subject_in_use');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/subjects/{{subjectId}}",
+            "description": "A subject can only be deleted when no course or teacher qualification uses it."
+          }
+        },
+        {
+          "name": "Delete course",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/courses/{{courseId}}",
+            "description": "Only courses nothing references (curricula, teacher qualifications, score columns) can be deleted; otherwise `409 course_in_use`, and you should deactivate the course instead."
+          }
+        },
+        {
+          "name": "Delete subject",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/subjects/{{subjectId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Session (run last)",
+      "description": "These change the session state: changing the password revokes refresh tokens, and logout clears the cookies. Run Auth → Login (admin) again afterwards.",
+      "item": [
+        {
+          "name": "Change my password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));",
+                  "if (pm.response.code === 204) {",
+                  "  // Swap the variables so 'Login (admin)' keeps working and running this again changes it back.",
+                  "  const oldPw = pm.collectionVariables.get('adminPassword');",
+                  "  pm.collectionVariables.set('adminPassword', pm.collectionVariables.get('newAdminPassword'));",
+                  "  pm.collectionVariables.set('newAdminPassword', oldPw);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"current_password\": \"{{adminPassword}}\",\n  \"new_password\": \"{{newAdminPassword}}\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/me/password",
+            "description": "Changes the logged-in user's password and revokes all their refresh tokens (the current access token keeps working until it expires). The test script swaps `adminPassword` and `newAdminPassword` on success, so run it twice to get back to the original password. Note that `.env` still holds the original one."
+          }
+        },
+        {
+          "name": "Logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/auth/logout",
+            "description": "Revokes the current refresh token and clears both cookies. Run Login again afterwards."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -38,27 +38,29 @@ There is no Makefile or linter config.
 
 Dependencies point inward toward `internal/domain`. The domain must not import bun, net/http, chi, jwt or bcrypt.
 
-- **`internal/domain/derr`**: the only error type the domain returns. `*derr.Error{Kind, Code, Msg, Fields}`. Use the constructors `derr.Invalid/NotFound/Conflict/RuleViolation/Forbidden/Unauthenticated`, `derr.FieldErrors` to collect field validation errors (`f.AddErr("role", role.Validate())`), and `derr.Is(err, code)` / `derr.IsKind` to check them. Each kind maps to exactly one HTTP status: 400/404/409/422/403/401.
+- **`internal/domain/derr`**: the only error type the domain returns. `*derr.Error{Kind, Code, Msg, Fields}`. Use the constructors `derr.Invalid/NotFound/Conflict/RuleViolation/Forbidden/Unauthenticated`, `derr.FieldErrors` to collect several field errors (`f.AddErr("role", role.Validate())`), `derr.InvalidField("status", err)` for a single one, `derr.ErrNothingToUpdate` for an empty PATCH, and `derr.Is(err, code)` / `derr.IsKind` to check them. Each kind maps to exactly one HTTP status: 400/404/409/422/403/401.
 - **`internal/domain/shared`**: `Actor`, `Role`, `PageRequest`/`Page[T]`, `Nullable[T]` (PATCH tri-state), `AcademicYear` (Aug 1 – Jul 31, with `Contains`), `Semester`, and the date helpers (`DateOf`, `NewDate`). Dates are `time.Time` at midnight UTC.
-- Value types (enums, ranges) expose `Validate() error`, not `Valid() bool`. The error message describes the allowed values and leaves out the field name, e.g. `"must be one of: male, female, other"`, so `FieldErrors.AddErr` can attach the field.
+- Value types (enums, ranges) expose `Validate() error`, not `Valid() bool`. The error message describes the allowed values and leaves out the field name, e.g. `"must be one of: male, female, other"`, so `FieldErrors.AddErr` can attach the field. `shared.ValidateText(s, maxLen)` does the same for required free text. Never return a bare `Validate()` error from a service: wrap it with `derr.InvalidField`, otherwise it renders as a 500.
 - **`internal/domain/port`**: `TxManager`, `PasswordHasher`, `TokenIssuer`, `SecretGenerator`, `Clock`.
-- **`internal/domain/<aggregate>/`** (currently `identity`) holds:
+- **`internal/domain/<aggregate>/`** (currently `identity`, `subject`, `course`) holds:
   - the entity and its constructor, which validates input and aggregates every field error;
   - `input.go`, `repository.go` (the port interfaces) and `errors.go` (codes plus predefined `Err*` values);
   - services taking `(ctx, actor, ...)`. Services also enforce admin-only rules (`actor.RequireAdmin()`), not just the HTTP layer.
-  - Unit tests use the in-memory fakes in `fakes_test.go`.
-  - Other aggregates that create users use `identity.NewUser` and `identity.EnsureUnique`, never `UserService`.
+  - Unit tests use in-memory fakes of the ports (`fakes_test.go` or at the top of `service_test.go`).
+  - Reads that need another aggregate's data return a `View` (e.g. `course.View` adds `SubjectName`). A service that needs another aggregate declares a narrow reader interface (`course.SubjectReader`) instead of depending on that aggregate's service.
+  - Other aggregates that create users use `identity.NewUser` and `identity.EnsureUnique` (in `identity/uniqueness.go`), never `UserService`.
 - **`internal/adapter/postgres`**: bun repositories, each with an unexported row struct.
   - Embed `repo` and use `r.idb(ctx)` so that queries join the transaction from `TxManager.WithinTx`.
   - Embed `timestamps` in rows (it bumps `updated_at` on update).
-  - Wrap write errors with `translate(err, constraintErrors{...})` so that constraint names map to domain errors.
+  - Wrap write errors with `translate(err, constraintErrors{...})` so that constraint names map to domain errors. The same FK means different things on insert and on delete (`fk_courses_subject_id` is "subject not found" when creating a course, "subject in use" when deleting a subject), so use a separate map per operation.
+  - Views that join other tables use a row struct embedding the base row with `bun:",extend"` plus `scanonly` columns (see `courseViewRow`).
   - Return the aggregate's `ErrXNotFound` on `sql.ErrNoRows`.
   - bun 1.3 uses `int64` for `Limit`/`Offset`/`ScanAndCount`.
 - **`internal/adapter/postgres/pgtest`**: `pgtest.DB(t)` returns a migrated, truncated Postgres from testcontainers, one container per test package. Tests that use it must not call `t.Parallel()`. Repo tests are in `package postgres_test`.
 - **`internal/adapter/security`**: bcrypt hasher, HS256 JWT issuer and verifier (claims `sub`, `role`), and a random refresh-token secret generator.
 - **`internal/adapter/httpapi`**: the HTTP layer. The directory isn't named `http`, so the package doesn't shadow net/http.
   - `router.go`: `NewRouter` sets up the middleware chain and mounts each handler under `/api/v1`.
-  - `handler/`: each handler declares a small service interface and implements `MountRoutes(public, protected chi.Router)`. `protected` is already behind `middleware.Auth`. Gate admin-only routes with `protected.With(middleware.RequireRole(shared.RoleAdmin))`.
+  - `handler/`: each handler declares a small service interface and implements `MountRoutes(public, protected chi.Router)`. `protected` is already behind `middleware.Auth`. Don't add role middleware: the service checks permissions (see `docs/architecture.md`, Authorization). Shared helpers such as `actorAndID(r)` live in `handler/handler.go`.
   - `dto/`: request and response structs. `dto.Date` handles `YYYY-MM-DD`, `dto.Nullable[T]` handles PATCH fields, and `dto.NewPageResponse` builds paginated responses.
   - `httpx/`: `DecodeBody[T](w, r)` (JSON + shape-only `validate` tags, errors as `fields[]`), `GetParamID`, the query helpers, `GetPageRequest`, and `httpx.Actor(r)`.
   - `respond/`: `respond.Error(w, r, err)` is the single place where errors become HTTP responses. It handles `*respond.APIError` and `*derr.Error`; anything else becomes a logged 500.

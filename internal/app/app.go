@@ -12,8 +12,10 @@ import (
 	"goschool/internal/adapter/postgres"
 	"goschool/internal/adapter/security"
 	"goschool/internal/config"
+	"goschool/internal/domain/course"
 	"goschool/internal/domain/identity"
 	"goschool/internal/domain/port"
+	"goschool/internal/domain/subject"
 )
 
 type App struct {
@@ -42,6 +44,8 @@ func New(cfg config.Config, db *bun.DB, o Overrides) *App {
 
 	userRepo := postgres.NewUserRepo(db)
 	tokenRepo := postgres.NewTokenRepo(db)
+	subjectRepo := postgres.NewSubjectRepo(db)
+	courseRepo := postgres.NewCourseRepo(db)
 
 	authSvc := identity.NewAuthService(identity.AuthServiceDeps{
 		Users:      userRepo,
@@ -61,6 +65,9 @@ func New(cfg config.Config, db *bun.DB, o Overrides) *App {
 		Clock:  clock,
 	})
 
+	subjectSvc := subject.NewService(subjectRepo, tx)
+	courseSvc := course.NewService(courseRepo, subjectRepo, tx)
+
 	router := httpapi.NewRouter(httpapi.RouterConfig{
 		AllowedOrigins: cfg.HTTP.AllowedOrigins,
 		Verifier:       jwt,
@@ -70,6 +77,8 @@ func New(cfg config.Config, db *bun.DB, o Overrides) *App {
 				RefreshPath: httpapi.APIPrefix + "/auth",
 			}),
 			handler.NewUserHandler(userSvc),
+			handler.NewSubjectHandler(subjectSvc),
+			handler.NewCourseHandler(courseSvc),
 		},
 	})
 

@@ -14,7 +14,6 @@ const (
 	CodeTokenNotFound            = "token_not_found"
 	CodeCurrentPasswordIncorrect = "current_password_incorrect"
 	CodeCannotDeactivateSelf     = "cannot_deactivate_self"
-	CodeNothingToUpdate          = "nothing_to_update"
 )
 
 var (
@@ -28,5 +27,4 @@ var (
 	ErrRefreshTokenReused  = derr.Unauthenticated(CodeRefreshTokenReused, "Refresh token was already used; all sessions have been revoked")
 	ErrTokenNotFound       = derr.NotFound(CodeTokenNotFound, "Token not found")
 	ErrCannotDeactivate    = derr.RuleViolation(CodeCannotDeactivateSelf, "You cannot deactivate your own account")
-	ErrNothingToUpdate     = derr.Invalid(CodeNothingToUpdate, "At least one field must be provided")
 )

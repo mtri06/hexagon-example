@@ -19,6 +19,7 @@ import (
 	"goschool/internal/adapter/security"
 	"goschool/internal/app"
 	"goschool/internal/config"
+	"goschool/internal/domain/derr"
 	"goschool/internal/domain/identity"
 	"goschool/internal/domain/shared"
 )
@@ -237,7 +238,7 @@ func TestUserAdministration(t *testing.T) {
 	admin.expect(admin.do(http.MethodGet, fmt.Sprintf("/users/%d", id), nil), 200, "")
 	admin.expect(admin.do(http.MethodGet, "/users/99999", nil), 404, identity.CodeUserNotFound)
 	admin.expect(admin.do(http.MethodGet, "/users/abc", nil), 400, "invalid_param")
-	admin.expect(admin.do(http.MethodPatch, fmt.Sprintf("/users/%d", id), map[string]any{}), 400, identity.CodeNothingToUpdate)
+	admin.expect(admin.do(http.MethodPatch, fmt.Sprintf("/users/%d", id), map[string]any{}), 400, derr.CodeNothingToUpdate)
 
 	patched := admin.do(http.MethodPatch, fmt.Sprintf("/users/%d", id), map[string]any{"email": nil, "name": "Renamed"})
 	admin.expect(patched, 200, "")

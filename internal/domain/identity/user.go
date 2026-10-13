@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"goschool/internal/domain/derr"
 	"goschool/internal/domain/port"
@@ -81,7 +80,7 @@ func NewUser(in CreateUserInput, role shared.Role, hasher port.PasswordHasher, n
 	validatePassword(f, "password", in.Password)
 	f.AddErr("role", u.Role.Validate())
 	validateEmail(f, u.Email)
-	validateName(f, u.Name)
+	f.AddErr("name", shared.ValidateText(u.Name, maxNameLen))
 	validateDateOfBirth(f, u.DateOfBirth, now)
 	f.AddErr("gender", u.Gender.Validate())
 	if err := f.Err(); err != nil {
@@ -102,7 +101,7 @@ func NewUser(in CreateUserInput, role shared.Role, hasher port.PasswordHasher, n
 // deactivated by this update.
 func (u *User) ApplyUpdate(in UpdateUserInput, now time.Time) (deactivated bool, err error) {
 	if in.IsEmpty() {
-		return false, ErrNothingToUpdate
+		return false, derr.ErrNothingToUpdate
 	}
 	next := *u
 	f := derr.FieldErrors{}
@@ -112,7 +111,7 @@ func (u *User) ApplyUpdate(in UpdateUserInput, now time.Time) (deactivated bool,
 	}
 	if in.Name != nil {
 		next.Name = strings.TrimSpace(*in.Name)
-		validateName(f, next.Name)
+		f.AddErr("name", shared.ValidateText(next.Name, maxNameLen))
 	}
 	if in.DateOfBirth != nil {
 		next.DateOfBirth = shared.DateOf(*in.DateOfBirth)
@@ -170,15 +169,6 @@ func validateEmail(f derr.FieldErrors, email *string) {
 	// ParseAddress also accepts "Name <a@b.c>"; require the bare address.
 	if addr, err := mail.ParseAddress(*email); err != nil || addr.Address != *email {
 		f.Add("email", "must be a valid email address")
-	}
-}
-
-func validateName(f derr.FieldErrors, name string) {
-	switch n := utf8.RuneCountInString(name); {
-	case n == 0:
-		f.Add("name", "is required")
-	case n > maxNameLen:
-		f.Add("name", "must be at most 255 characters")
 	}
 }
 

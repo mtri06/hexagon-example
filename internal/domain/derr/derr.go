@@ -52,7 +52,11 @@ const (
 	CodeValidationFailed = "validation_failed"
 	CodeForbidden        = "forbidden"
 	CodeUnauthenticated  = "unauthenticated"
+	CodeNothingToUpdate  = "nothing_to_update"
 )
+
+// ErrNothingToUpdate is returned by partial updates that change no field.
+var ErrNothingToUpdate = Invalid(CodeNothingToUpdate, "At least one field must be provided")
 
 type FieldError struct {
 	Field   string

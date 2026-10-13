@@ -710,6 +710,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SubjectPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
     post:
       tags: [Subjects]
@@ -802,6 +803,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CoursePage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
     post:
       tags: [Courses]

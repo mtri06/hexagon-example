@@ -80,7 +80,7 @@ func TestNewUserValidation(t *testing.T) {
 func TestApplyUpdate(t *testing.T) {
 	u, _ := NewUser(validInput("jane"), shared.RoleStudent, fakeHasher{}, now)
 
-	if _, err := u.ApplyUpdate(UpdateUserInput{}, now); !derr.Is(err, CodeNothingToUpdate) {
+	if _, err := u.ApplyUpdate(UpdateUserInput{}, now); !derr.Is(err, derr.CodeNothingToUpdate) {
 		t.Fatalf("expected nothing_to_update, got %v", err)
 	}
 

@@ -112,7 +112,9 @@ through a dedicated repo method (`LockScope`).
 
 ### Authorization
 - `middleware.Auth` verifies the JWT and puts a `shared.Actor{UserID, Role}` in the context.
-  `middleware.RequireRole` blocks roles that can never access a route.
+- Services are the single source of truth for permissions, including pure role checks
+  (`actor.RequireAdmin()`). Handlers don't repeat them. `middleware.RequireRole` exists but
+  is only for routes no service backs.
 - Rules that depend on data ("student reads only self", "teacher grades only assigned
   class-courses", "teacher sees only students they teach") live in domain services. Services
   receive `actor` explicitly and return `derr.Forbidden`.
@@ -228,7 +230,7 @@ See the phased plan; each phase ships one vertical slice (domain → bun → HTT
 
 - [x] Phase 0: foundation (config, derr/shared/port, bun + tx, router, respond, CLI, pgtest, docker-compose)
 - [x] Phase 1: identity and auth (`/auth/*`, `/users*`, `/admins`, `seed-admin`)
-- [ ] Phase 2: subjects and courses
+- [x] Phase 2: subjects and courses
 - [ ] Phase 3: teachers and students
 - [ ] Phase 4: classes, curriculum, homeroom, enrollments
 - [ ] Phase 5: teaching assignments
