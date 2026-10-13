@@ -1,11 +1,14 @@
 package respond
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"goschool/internal/domain/derr"
@@ -42,6 +45,49 @@ func TestErrorMapping(t *testing.T) {
 				t.Fatalf("code = %q, want %q", body.Code, c.wantCode)
 			}
 		})
+	}
+}
+
+func TestErrorContextErrors(t *testing.T) {
+	req := func() *http.Request { return httptest.NewRequest(http.MethodGet, "/", nil) }
+	canceledReq := func() *http.Request {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return req().WithContext(ctx)
+	}
+
+	canceledCases := []struct {
+		name string
+		r    *http.Request
+		err  error
+	}{
+		{"wrapped context.Canceled", req(), fmt.Errorf("query: %w", context.Canceled)},
+		{"request canceled, unrelated error", canceledReq(), errors.New("write: broken pipe")},
+	}
+	for _, c := range canceledCases {
+		rec := httptest.NewRecorder()
+		Error(rec, c.r, c.err)
+		if rec.Code != StatusClientClosedRequest || rec.Body.Len() != 0 {
+			t.Errorf("%s: status=%d body=%q", c.name, rec.Code, rec.Body.String())
+		}
+	}
+
+	timeoutCases := []struct {
+		name string
+		err  error
+	}{
+		{"wrapped context.DeadlineExceeded", fmt.Errorf("repo: %w", context.DeadlineExceeded)},
+		// What pgdriver returns when a context deadline hits mid-query.
+		{"socket i/o timeout", &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}},
+	}
+	for _, c := range timeoutCases {
+		rec := httptest.NewRecorder()
+		Error(rec, req(), c.err)
+		var body APIError
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != http.StatusServiceUnavailable || body.Code != CodeTimeout {
+			t.Errorf("%s: status=%d body=%+v", c.name, rec.Code, body)
+		}
 	}
 }
 
